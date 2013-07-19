@@ -17,14 +17,17 @@ package com.nicta.scoobi
 package application
 
 import java.net.{URLClassLoader, URL}
-import com.nicta.scoobi.io.FileSystems
 import java.io.File
 import org.apache.hadoop.filecache.DistributedCache
 import org.apache.hadoop.fs.Path
+import core._
+import impl.io.FileSystems
+import impl.ScoobiConfiguration._
+import impl.ScoobiConfigurationImpl._
 import org.apache.commons.logging.LogFactory
-import impl.monitor.Loggable._
 import impl.control.SystemProperties
-
+import impl.control.Exceptions._
+import impl.monitor.Loggable._
 /**
  * This trait defines:
  *
@@ -36,11 +39,18 @@ trait LibJars {
 
   protected[scoobi] lazy val fss: FileSystems = FileSystems
   protected[scoobi] lazy val sysProps: SystemProperties = SystemProperties
+  private val LIBJARS_DIR_PARAM = "scoobi.libjarsdir"
+  private val LIBJARS_DIR_NAME = "libjars"
 
   /**
    * @return the path of the directory to use when loading jars to the filesystem.
    */
+<<<<<<< HEAD
   def libjarsDirectory(implicit configuration: ScoobiConfiguration) = fss.dirPath(configuration.get("scoobi.libjarsdir","libjars"))
+=======
+  def libjarsDirectory(implicit configuration: ScoobiConfiguration) = fss.dirPath(sysProps.get(LIBJARS_DIR_PARAM).
+    getOrElse(configuration.get(LIBJARS_DIR_PARAM, LIBJARS_DIR_NAME)))
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
 
   /** this variable controls if the upload must be done at all */
   def upload: Boolean = true
@@ -48,15 +58,15 @@ trait LibJars {
   /**
    * @return the list of library jars to upload
    */
-  def jars: Seq[URL] = classLoaderJars ++ hadoopClasspathJars
+  def jars(implicit configuration: ScoobiConfiguration): Seq[URL] = classLoaderJars ++ hadoopClasspathJars
 
   /**
    * @return the list of library jars to upload, provided by the jars loaded by the current classloader
    */
   private[scoobi]
-  lazy val classLoaderJars: Seq[URL] =
-    Thread.currentThread.getContextClassLoader.asInstanceOf[URLClassLoader].getURLs.filter(url => !url.getFile.contains("hadoop-core")).
-      debugNot(_.isEmpty, jars => "jars found with the classloader\n"+jars.mkString("\n"))
+  def classLoaderJars(implicit configuration: ScoobiConfiguration): Seq[URL] = tryOrElse {
+    configuration.scoobiClassLoader.asInstanceOf[URLClassLoader].getURLs.filter(url => !url.getFile.contains("hadoop-core")).toSeq
+  }(Seq()).debugNot(_.isEmpty, jars => "jars found with the classloader\n"+jars.mkString("\n"))
 
 
   /**
@@ -112,11 +122,12 @@ trait LibJars {
   /**
    * @return a configuration where the appropriate properties are set-up for uploaded jars: distributed files + classpath
    */
-  def configureJars(implicit configuration: ScoobiConfiguration) = if (upload) {
+  def configureJars(implicit configuration: ScoobiConfiguration) = {
     logger.debug("adding the jars paths to the distributed cache")
-    uploadedJars.foreach(path => DistributedCache.addFileToClassPath(path, configuration))
+    uploadedJars.foreach(path => DistributedCache.addFileToClassPath(new Path(path.toUri.getPath), configuration))
 
     logger.debug("adding the jars classpaths to the mapred.classpath variable")
+    // add new jars to the classpath and make sure that values are still unique for cache files and classpath entries
     configuration.addValues("mapred.classpath", jars.map(j => libjarsDirectory + (new File(j.getFile).getName)), ":")
   }
 }

@@ -17,66 +17,67 @@ package com.nicta.scoobi
 package guide
 
 class QuickStart extends ScoobiPage { def is = "Quick Start".title^
-                                                                                                                        """
+                                                                                                                        s2"""
 ### Prerequisites
 
 Before starting, you will need:
 
 * [Cloudera's Hadoop 4.0.1 (CDH4)](http://www.cloudera.com/hadoop/)
-* [Sbt 0.12.0](https://github.com/harrah/xsbt/wiki)
+* [Sbt 0.12.3](http://www.scala-sbt.org/)
 
-In addition to Hadoop, scoobi uses [sbt](https://github.com/harrah/xsbt/wiki) (version 0.12.0) to simplify building and packaging a project for running on Hadoop. We also provide an sbt plugin [sbt-scoobi](https://github.com/NICTA/sbt-scoobi) to allow you to contain a self-contained JAR for hadoop.
+In addition to Hadoop, scoobi uses [sbt](http://www.scala-sbt.org) (version 0.12.3) to simplify building and packaging a project for running on Hadoop.
   
 ### Directory Structure  
   
 Here the steps to get started on your own project:
 
 ```
-$ mkdir my-app
-$ cd my-app
-$ mkdir -p src/main/scala
+$$ mkdir my-app
+$$ cd my-app
+$$ mkdir -p src/main/scala
 ```
 
 We first can create a `build.sbt` file that has a dependency on Scoobi:
 
 ```scala
-name := "MyApp"
+name := "MyApplication"
 
-version := "0.1"
+version := "1.0"
 
-scalaVersion := "2.9.2"
+scalaVersion := "2.10.1"
 
-libraryDependencies += "com.nicta" %% "scoobi" % "${SCOOBI_VERSION}"
+libraryDependencies += "com.nicta" %% "scoobi" % "$VERSION"
 
+<<<<<<< HEAD
 scalacOptions ++= Seq("-Ydependent-method-types", "-deprecation")
 
 resolvers ++= Seq(
     "cloudera" at "https://repository.cloudera.com/content/repositories/releases",
     "Sonatype-snapshots" at "http://oss.sonatype.org/content/repositories/snapshots")
+=======
+resolvers ++= Seq("cloudera" at "https://repository.cloudera.com/content/repositories/releases",
+                  "Sonatype-snapshots" at "http://oss.sonatype.org/content/repositories/snapshots")
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
 ```
 
 ### Write your code
 
-Now we can write some code. In `src/main/scala/myfile.scala`, for instance:
-
-```scala
-package mypackage.myapp
-
+Now we can write some code. In `src/main/scala/myfile.scala`, for instance: ${snippet{
 import com.nicta.scoobi.Scoobi._
+import Reduction._
 
 object WordCount extends ScoobiApp {
   def run() {
     val lines = fromTextFile(args(0))
 
-    val counts = lines.flatMap(_.split(" "))
-                      .map(word => (word, 1))
-                      .groupByKey
-                      .combine((a: Int, b: Int) => a + b)
-    
-    persist(toTextFile(counts, args(1)))
+    val counts = lines.mapFlatten(_.split(" "))
+      .map(word => (word, 1))
+      .groupByKey
+      .combine(Sum.int)
+    counts.toTextFile(args(1)).persist
   }
 }
-```  
+}}
 
 ### Running
 
@@ -84,10 +85,10 @@ The Scoobi application can now be compiled and run using sbt:
 
 ```
 > sbt compile
-> sbt run-main 'mypackage.myapp.WordCount input-files output'
+> sbt "run-main mypackage.myapp.WordCount input-files output"
 ```
 
 Your Hadoop configuration will automatically get picked up, and all relevant JARs will be made available.
 
-If you had any trouble following along, take a look at [Word Count](https://github.com/NICTA/scoobi/tree/${SCOOBI_BRANCH}/examples/wordCount) for a self contained example."""
+If you had any trouble following along, take a look at [Word Count](https://github.com/NICTA/scoobi/tree/$BRANCH/examples/wordCount) for a self contained example."""
 }

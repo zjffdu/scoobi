@@ -1,11 +1,27 @@
+/**
+ * Copyright 2011,2012 National ICT Australia Limited
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.nicta.scoobi
 package application
 
-import impl.time.SimpleTimer
 import org.apache.commons.logging.LogFactory
-import HadoopLogFactory._
-import org.apache.hadoop.fs.FileSystem._
+import core._
 import Mode._
+import HadoopLogFactory._
+import impl.time.SimpleTimer
+import impl.ScoobiConfiguration._
 
 trait InMemoryHadoop extends ScoobiUserArgs {
 
@@ -31,10 +47,17 @@ trait InMemoryHadoop extends ScoobiUserArgs {
    * @return a configuration with memory setup
    */
   def configureForInMemory(implicit configuration: ScoobiConfiguration): ScoobiConfiguration = {
+    configureArguments
     configuration.modeIs(InMemory)
+    if (!configuration.jobName.isDefined) configuration.jobNameIs(getClass.getSimpleName)
     configuration.setAsInMemory    
   }
-  
+
+  /** set command-line arguments on the configuration object */
+  protected def configureArguments(implicit configuration: ScoobiConfiguration) {
+    configuration.setBoolean("scoobi.debug.showComputationGraph", showComputationGraph)
+  }
+
   /** @return a function to display execution times. The default uses log messages */
   def displayTime(prefix: String) = (timer: SimpleTimer) => {
     LogFactory.getFactory.getInstance(SCOOBI_TIMES).info(prefix+": "+timer.time)
@@ -65,5 +88,4 @@ trait InMemoryHadoop extends ScoobiUserArgs {
   def setLogFactory(name: String = classOf[HadoopLogFactory].getName) {
     HadoopLogFactory.setLogFactory(name, quiet, showTimes, level, categories)
   }
-
 }

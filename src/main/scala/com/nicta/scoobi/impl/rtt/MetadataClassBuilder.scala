@@ -19,8 +19,8 @@ package rtt
 
 import java.io._
 import javassist._
-
-import application.ScoobiConfiguration
+import core._
+import org.apache.commons.logging.LogFactory
 
 /**
  * A class for building a class extending T at run-time.
@@ -45,54 +45,70 @@ import application.ScoobiConfiguration
  *
  */
 case class MetadataClassBuilder[T](className: String, metaData: Any)(implicit sc: ScoobiConfiguration, mf: Manifest[T]) {
+  private lazy val logger = LogFactory.getLog("scoobi.MetadataClassBuilder")
 
   /** string value showing the generated class source code */
-  override lazy val toString = {
-    builtCtClass
+  lazy val show = {
+    ctClass
     Seq("class "+className+" extends "+parentClassName+" {",
           indent(code.toString),
         "}").mkString("\n")
   }
 
   /** Compile the definition and code for the class. */
-  def toRuntimeClass: RuntimeClass = new RuntimeClass(className, builtCtClass.toClass, classBytecode)
+  def toRuntimeClass: RuntimeClass = new RuntimeClass(className, toClass, classBytecode)
+
   /** @return the java class */
-  def toClass: Class[_] = builtCtClass.toClass
-
-  private lazy val parentClassName = implicitly[Manifest[T]].erasure.getName
-  /** The compile-time representation of the class being built. */
-  private lazy val ctClass: CtClass = pool.makeClass(className, pool.get(parentClassName))
-  /** The compile-time representation of the class once built. */
-  private lazy val builtCtClass = { build; ctClass }
-
-  private def build(implicit sc: ScoobiConfiguration) {
-    val metadataPath = ScoobiMetadata.saveMetadata("scoobi.metadata."+className, metaData)
-    addMethod("java.lang.String", "metadataPath", "return \""+metadataPath+"\";")
+  def toClass: Class[_] = {
+    val classLoader = sc.scoobiClassLoader
+    try { classLoader.loadClass(className) } catch { case e: Throwable =>
+      logger.debug(s"$className can't be loaded from the current class loader ($classLoader): (${e.getMessage}), try creating the runtime class instead if not previously created")
+      val r = ctClass.toClass
+      classLoader.loadClass(className)
+      r
+    }
   }
 
-  private val pool: ClassPool = {
+  private lazy val parentClassName = implicitly[Manifest[T]].runtimeClass.getName
+  /** The compile-time representation of the class being built. */
+  private def ctClass: CtClass = compileTimeClass.getOrElse(createCompileTimeClass)
+  private var compileTimeClass: Option[CtClass] = None
+  private def createCompileTimeClass: CtClass = {
+    val ct = pool.makeClass(className, pool.get(parentClassName))
+    build(ct)
+    compileTimeClass = Some(ct)
+    ct
+  }
+
+  private def build(ct: CtClass) = {
+    val metadataPath = ScoobiMetadata.saveMetadata("scoobi.metadata."+className, metaData)(sc)
+    addMethod(ct, "java.lang.String", "metadataPath", "return \""+metadataPath+"\";")
+  }
+
+  private lazy val pool: ClassPool = {
     val pool = new ClassPool
-    pool.appendClassPath(new LoaderClassPath(this.getClass.getClassLoader))
+    pool.appendClassPath(new LoaderClassPath(sc.scoobiClassLoader))
+    pool.appendClassPath(new LoaderClassPath(getClass.getClassLoader))
     pool
   }
   /** The class bytecode */
   private lazy val classBytecode = {
     val bytecodeStream = new ByteArrayOutputStream
-    builtCtClass.toBytecode(new DataOutputStream(bytecodeStream))
+    ctClass.toBytecode(new DataOutputStream(bytecodeStream))
     bytecodeStream.toByteArray
   }
 
   /** add a parameter-less method to the class being built */
-  private def addMethod(returnType: String, methodName: String, body: =>String): CtMethod = addMethod(returnType, methodName, Array(), body)
+  private def addMethod(ct: CtClass, returnType: String, methodName: String, body: =>String): CtClass = addMethod(ct, returnType, methodName, Array(), body)
   /** add a method to the class being built */
-  private def addMethod(returnType: String, methodName: String, parameters: Array[String] = Array(), body: =>String): CtMethod = {
+  private def addMethod(ct: CtClass, returnType: String, methodName: String, parameters: Array[String] = Array(), body: =>String): CtClass = {
     code.append(returnType+" "+methodName+parameters.zipWithIndex.map { case (p, i) => "$"+(i+1)+": "+p }.mkString(" (", ", ", ") {\n"))
     code.append(indent(body))
     code.append("\n}\n\n")
 
-    val method = CtNewMethod.make(pool.get(returnType), methodName, parameters.map(pool.get), Array(), body, ctClass)
-    ctClass.addMethod(method)
-    method
+    val method = CtNewMethod.make(pool.get(returnType), methodName, parameters.map(pool.get), Array(), body, ct)
+    ct.addMethod(method)
+    ct
   }
 
   private lazy val code = new StringBuilder

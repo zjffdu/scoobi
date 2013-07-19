@@ -1,6 +1,25 @@
+/**
+ * Copyright 2011,2012 National ICT Australia Limited
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.nicta.scoobi
 package impl
 package collection
+
+import scalaz.{NonEmptyList, Zipper}
+import NonEmptyList._
+import Zipper._
 
 private[scoobi]
 trait Seqs {
@@ -20,6 +39,93 @@ trait Seqs {
   }
 
   implicit def sequenceToSeqBoundedLinearSeq[A](seq: Seq[A]): BoundedLinearSeq[A] = SeqBoundedLinearSeq(seq)
+
+  /** @return an extension for a seq */
+  implicit def extendSeq[T](seq: Seq[T]): ExtendedSeq[T] = new ExtendedSeq(seq)
+  /**
+   * Additional methods for seqs
+   */
+  class ExtendedSeq[T](seq: Seq[T]) {
+
+    /** update the last element if there is one */
+    def updateLast(f: T => T) = seq match {
+      case s :+ last => s :+ f(last)
+      case other     => other
+    }
+
+    /** update the last element or start the sequence with a new init value */
+    def updateLastOr(f: PartialFunction[T, T])(initValue: =>T) = seq match {
+      case s :+ last => s :+ f(last)
+      case other     => seq :+ initValue
+    }
+
+    /**
+     * remove the first element satisfying the predicate
+     * @return a seq minus the first element satisfying the predicate
+     */
+    def removeFirst(predicate: T => Boolean): Seq[T] = {
+      val (withoutElement, startWithElement) = seq span (x => !predicate(x))
+      withoutElement ++ startWithElement.drop(1)
+    }
+
+    /**
+     * @return the elements of the sequence one by one until the last one verifies the predicate
+     *         the whole sequence if no element verifies the predicate
+     */
+    def takeUntil(predicate: T => Boolean): Seq[T] = {
+      val (first, rest) = seq.span(e => !predicate(e))
+      first ++ rest.headOption.toSeq
+    }
+
+  }
+
+  /**
+   * @return a group elements of a sequence into groups all elements are transitively related in each group
+   */
+  def transitiveClosure[A](seq: Seq[A])(relation: (A, A) => Boolean) =
+    seq.foldLeft(Seq[NonEmptyList[A]]()) { (res, cur) =>
+      res.toList match {
+        case Nil          => Seq(nels(cur))
+        case head :: tail =>
+          val groups = nel(head, tail).toZipper
+          groups.findZ(_.list.exists(relation(_, cur))).map(_.modify(_ :::> List(cur))).
+            getOrElse(groups.insertRight(nels(cur))).toStream.toVector
+      }
+    }
+
+  /** add a to Nel method on a sequence to turn it into a Nel, depending on the existence of 'head' */
+  implicit class ToNel[A](seq: Seq[A]) {
+    def toNel(default: =>A): NonEmptyList[A] = seq match {
+      case head +: rest => nel(head, rest.toList)
+      case _            => nel(default, Nil)
+    }
+  }
+  /** add a toZipper method on a sequence to turn it into a Zipper, depending on the existence of 'head' */
+  implicit class ToZipper[A](seq: Seq[A]) {
+    def toZipper(default: =>A): Zipper[A] = seq.toNel(default).toZipper
+  }
+
+  /** function returning elements toString separated by a newline */
+  val mkStrings = (seq: Seq[_]) => seq.mkString("\n")
+}
+/**
+ * extrator for the first element of Seq[T]
+ */
+object +: {
+  def unapply[T](l: Seq[T]): Option[(T, Seq[T])] = {
+    if(l.isEmpty) None
+    else          Some(l.head, l.tail)
+  }
+}
+
+/**
+ * extrator for the last element of Seq[T]
+ */
+object :+ {
+  def unapply[T](l: Seq[T]): Option[(Seq[T], T)] = {
+    if(l.isEmpty) None
+    else          Some(l.init, l.last)
+  }
 }
 
 trait BoundedLinearSeq[+A] {

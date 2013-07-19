@@ -17,10 +17,14 @@ package com.nicta.scoobi
 package testing
 
 import java.io.File
-import scala.io.Source
 import org.apache.hadoop.fs.{Path, FileSystem}
+import scala.io.Source
 import Scoobi._
-import io.FileSystems
+import core.WireFormat
+import impl.io.FileSystems
+
+import impl.ScoobiConfiguration._
+import impl.ScoobiConfigurationImpl._
 
 /**
  * This trait creates input and output files which are temporary
@@ -50,7 +54,7 @@ trait TestFiles {
     getFiles(new File(dir))
 
   def deleteFiles(implicit configuration: ScoobiConfiguration) {
-    deleteFiles(configuration.get("scoobi.test.files", "").split(",").toSeq.filterNot(_.isEmpty).map(new File(_)))
+    deleteFiles(configuration.configuration.get("scoobi.test.files", "").split(",").toSeq.filterNot(_.isEmpty).map(new File(_)))
   }
 
   def path(path: String)(implicit configuration: ScoobiConfiguration): String = TempFiles.path(new File(path), isRemote)
@@ -58,7 +62,7 @@ trait TestFiles {
 
   def isRemote(implicit configuration: ScoobiConfiguration) = configuration.isRemote
 
-  implicit def fs(implicit configuration: ScoobiConfiguration) = FileSystem.get(configuration)
+  implicit def fs(implicit configuration: ScoobiConfiguration) = FileSystem.get(configuration.configuration)
 
   def moveToRemote(file: File, keep: Boolean = false)(implicit configuration: ScoobiConfiguration) = {
     if (isRemote) {
@@ -73,7 +77,7 @@ trait TestFiles {
 
   /** readLines in the ch* files of a result directory */
   def dirResults(implicit sc: ScoobiConfiguration) = (d: File) => {
-    getFiles(path(d)).filterNot(_.getName.contains(".crc")).flatMap(p => Source.fromFile(p).getLines.toSeq)
+    Vector(getFiles(path(d)).filterNot(_.getName.contains(".crc")).flatMap(p => Source.fromFile(p).getLines.toSeq):_*)
   }
 
   private def deleteFiles(files: Seq[File])(implicit configuration: ScoobiConfiguration) {
@@ -95,13 +99,13 @@ object TestFiles extends TestFiles
 import TestFiles._
 
 class InputTestFile[S](ls: Seq[String], mapping: String => S)
-                      (implicit configuration: ScoobiConfiguration, m: Manifest[S], w: WireFormat[S]) {
+                      (implicit configuration: ScoobiConfiguration, m: WireFormat[S]) {
 
   lazy val file = createTempFile("test.input")
 
   def inputLines = fromTextFile(TempFiles.writeLines(file, ls, isRemote))
-  def map[T : Manifest : WireFormat](f: S => T) = new InputTestFile(ls, f compose mapping)
-  def collect[T : Manifest : WireFormat](f: PartialFunction[S, T]) = new InputTestFile(ls, f compose mapping)
+  def map[T : WireFormat](f: S => T) = new InputTestFile(ls, f compose mapping)
+  def collect[T : WireFormat](f: PartialFunction[S, T]) = new InputTestFile(ls, f compose mapping)
   def lines: DList[S] = inputLines.map(mapping)
 }
 
@@ -119,7 +123,7 @@ case class OutputTestFile[T](list: DList[T])
   def outputFiles     = getFiles(outputDir)
 
   lazy val lines: Either[String, Seq[String]] = {
-    persist(configuration)(toTextFile(list, outputPath, overwrite = true))
+//    persist(configuration)(toTextFile(list, outputPath, overwrite = true))
     if (outputFiles.isEmpty) Left("There are no output files in "+ outputDir.getName)
     else                     Right(Source.fromFile(outputFiles.head).getLines.toSeq)
   }

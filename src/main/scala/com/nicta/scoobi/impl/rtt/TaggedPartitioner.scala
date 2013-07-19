@@ -18,16 +18,15 @@ package impl
 package rtt
 
 import org.apache.hadoop.mapreduce.Partitioner
-import javassist._
 import core._
-import application.ScoobiConfiguration
+import impl.ScoobiConfiguration
 
 /** Custom partitioner for tagged key-values. */
 trait TaggedPartitioner extends Partitioner[TaggedKey, TaggedValue]
 
 /** Companion object for dynamically constructing a subclass of TaggedPartitioner. */
 object TaggedPartitioner {
-  def apply(name: String, tags: Map[Int, (WireFormat[_], Grouping[_])])(implicit sc: ScoobiConfiguration): RuntimeClass =
+  def apply(name: String, tags: Map[Int, (WireReaderWriter, KeyGrouping)])(implicit sc: ScoobiConfiguration): RuntimeClass =
     MetadataClassBuilder[MetadataTaggedPartitioner](name, tags).toRuntimeClass
 }
 

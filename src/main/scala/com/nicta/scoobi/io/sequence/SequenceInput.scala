@@ -19,77 +19,78 @@ package sequence
 
 import java.io.IOException
 import org.apache.commons.logging.LogFactory
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
-import org.apache.hadoop.io.{Writable, SequenceFile}
+import org.apache.hadoop.io.{NullWritable, Writable, SequenceFile}
 import org.apache.hadoop.mapreduce.lib.input.{FileInputFormat, SequenceFileInputFormat}
 import org.apache.hadoop.mapreduce.Job
 
 import core._
-import application.ScoobiConfiguration
+import WireFormat._
+import impl.plan.DListImpl
+import impl.ScoobiConfiguration._
+import impl.io.Helper
+import impl.util.Compatibility
 
+/** Smart functions for materialising distributed lists by loading Sequence files. */
+trait SequenceInput {
 
-/** Smart functions for materializing distributed lists by loading Sequence files. */
-object SequenceInput {
-  lazy val logger = LogFactory.getLog("scoobi.SequenceInput")
-
+  def defaultSequenceInputFormat[K, V] = classOf[SequenceFileInputFormat[K, V]]
 
   /** Create a new DList from the "key" contents of one or more Sequence Files. Note that the type parameter K
     * is the "converted" Scala type for the Writable key type that must be contained in the the Sequence
     * Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertKeyFromSequenceFile[K : Manifest : WireFormat : SeqSchema](paths: String*): DList[K] =
-    convertKeyFromSequenceFile(List(paths: _*))
+  def keyFromSequenceFile[K : WireFormat : SeqSchema](paths: String*): DList[K] =
+    keyFromSequenceFile(paths, checkKeyType = true)
 
   /** Create a new DList from the "key" contents of a list of one or more Sequence Files. Note that the type parameter
     * K is the "converted" Scala type for the Writable key type that must be contained in the the
     * Sequence Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertKeyFromSequenceFile[K : Manifest : WireFormat : SeqSchema](paths: List[String], checkKeyType: Boolean = true): DList[K] = {
+  def keyFromSequenceFile[K : WireFormat : SeqSchema](paths: Seq[String], checkKeyType: Boolean = true, check: Source.InputCheck = Source.defaultInputCheck): DList[K] = {
     val convK = implicitly[SeqSchema[K]]
 
     val converter = new InputConverter[convK.SeqType, Writable, K] {
       def fromKeyValue(context: InputContext, k: convK.SeqType, v: Writable) = convK.fromWritable(k)
     }
 
-    DList.fromSource(new SeqSource[convK.SeqType, Writable, K]
-                        (paths, converter, checkKeyType)
-                        (convK.mf, implicitly[Manifest[Writable]], implicitly[Manifest[K]], implicitly[WireFormat[K]]))
+    fromSequenceSource(new CheckedSeqSource[convK.SeqType, Writable, K](paths,
+      defaultSequenceInputFormat[convK.SeqType, Writable],
+      converter,
+      checkKeyType,
+      check)(convK.mf, implicitly[Manifest[Writable]]))
   }
-
 
   /** Create a new DList from the "value" contents of one or more Sequence Files. Note that the type parameter V
     * is the "converted" Scala type for the Writable value type that must be contained in the the Sequence
     * Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertValueFromSequenceFile[V : Manifest : WireFormat : SeqSchema](paths: String*): DList[V] =
-    convertValueFromSequenceFile(List(paths: _*))
+  def valueFromSequenceFile[V : WireFormat : SeqSchema](paths: String*): DList[V] =
+    valueFromSequenceFile(paths, checkValueType = true)
 
 
   /** Create a new DList from the "value" contents of a list of one or more Sequence Files. Note that the type parameter
     * V is the "converted" Scala type for the Writable value type that must be contained in the the
     * Sequence Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertValueFromSequenceFile[V : Manifest : WireFormat : SeqSchema](paths: List[String], checkValueType: Boolean = true): DList[V] = {
+  def valueFromSequenceFile[V : WireFormat : SeqSchema](paths: Seq[String], checkValueType: Boolean = true, check: Source.InputCheck = Source.defaultInputCheck): DList[V] = {
     val convV = implicitly[SeqSchema[V]]
 
     val converter = new InputConverter[Writable, convV.SeqType, V] {
       def fromKeyValue(context: InputContext, k: Writable, v: convV.SeqType) = convV.fromWritable(v)
     }
 
-    DList.fromSource(new SeqSource[Writable, convV.SeqType, V]
-                        (paths, converter, checkValueType)
-                        (implicitly[Manifest[Writable]], convV.mf, implicitly[Manifest[V]], implicitly[WireFormat[V]]))
+    fromSequenceSource(new CheckedSeqSource[Writable, convV.SeqType, V](
+      paths,
+      defaultSequenceInputFormat[Writable, convV.SeqType],
+      converter,
+      checkValueType,
+      check)(implicitly[Manifest[Writable]], convV.mf))
   }
 
-
-  /** Create a new DList from the contents of one or more Sequence Files. Note that the type parameters K and V
-    * are the "converted" Scala types for the Writable key-value types that must be contained in the the Sequence
-    * Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertFromSequenceFile[K : Manifest : WireFormat : SeqSchema, V : Manifest : WireFormat : SeqSchema](paths: String*): DList[(K, V)] =
-    convertFromSequenceFile(List(paths: _*))
-
+  def fromSequenceFile[K : WireFormat : SeqSchema, V : WireFormat : SeqSchema](paths: String*): DList[(K, V)] =
+    fromSequenceFile(paths, checkKeyValueTypes = true)
 
   /** Create a new DList from the contents of a list of one or more Sequence Files. Note that the type parameters
     * K and V are the "converted" Scala types for the Writable key-value types that must be contained in the the
     * Sequence Files. In the case of a directory being specified, the input forms all the files in that directory. */
-  def convertFromSequenceFile[K : Manifest : WireFormat : SeqSchema, V : Manifest : WireFormat : SeqSchema](paths: List[String], checkFileTypes: Boolean = true): DList[(K, V)] = {
+  def fromSequenceFile[K : WireFormat : SeqSchema, V : WireFormat : SeqSchema](paths: Seq[String], checkKeyValueTypes: Boolean = true, check: Source.InputCheck = Source.defaultInputCheck): DList[(K, V)] = {
 
     val convK = implicitly[SeqSchema[K]]
     val convV = implicitly[SeqSchema[V]]
@@ -98,49 +99,57 @@ object SequenceInput {
       def fromKeyValue(context: InputContext, k: convK.SeqType, v: convV.SeqType) = (convK.fromWritable(k), convV.fromWritable(v))
     }
 
-    DList.fromSource(new SeqSource[convK.SeqType, convV.SeqType, (K, V)]
-                        (paths, converter, checkFileTypes)
-                        (convK.mf, convV.mf, implicitly[Manifest[(K,V)]], implicitly[WireFormat[(K,V)]]))
+    fromSequenceSource(new CheckedSeqSource[convK.SeqType, convV.SeqType, (K, V)](paths, defaultSequenceInputFormat, converter, checkKeyValueTypes, check)(convK.mf, convV.mf))
   }
 
+  def fromSequenceSource[K, V, A : WireFormat](source: SeqSource[K, V, A]) = DListImpl[A](source)
 
-  /** Create a new DList from the contents of one or more Sequence Files. Note that the type parameters K and V
-    * must match the type key-value type of the Sequence Files. In the case of a directory being specified,
-    * the input forms all the files in that directory. */
-  def fromSequenceFile[K <: Writable : Manifest : WireFormat, V <: Writable : Manifest : WireFormat](paths: String*): DList[(K, V)] =
-    fromSequenceFile(List(paths: _*))
-
-
-  /** Create a new DList from the contents of a list of one or more Sequence Files. Note
-    * that the type parameters K and V must match the type key-value type of the Sequence
-    * Files. In the case of a directory being specified, the input forms all the files in
-    * that directory. */
-  def fromSequenceFile[K <: Writable : Manifest : WireFormat, V <: Writable : Manifest : WireFormat](paths: List[String], checkFileTypes: Boolean = true): DList[(K, V)] = {
+  def checkedSource[K : Manifest, V : Manifest](paths: Seq[String], checkKeyValueTypes: Boolean = true) = {
     val converter = new InputConverter[K, V, (K, V)] {
       def fromKeyValue(context: InputContext, k: K, v: V) = (k, v)
     }
-
-    DList.fromSource(new SeqSource[K, V, (K, V)](paths, converter, checkFileTypes))
+    new CheckedSeqSource[K, V, (K, V)](paths, defaultSequenceInputFormat, converter, checkKeyValueTypes)
   }
 
+  def source[K : WireFormat : SeqSchema, V : WireFormat : SeqSchema](paths: Seq[String]) = {
+    val converter = new InputConverter[K, V, (K, V)] {
+      def fromKeyValue(context: InputContext, k: K, v: V) = (k, v)
+    }
+    new SeqSource[K, V, (K, V)](paths, defaultSequenceInputFormat[K, V], converter)
+  }
 
-  /* Class that abstracts all the common functionality of reading from sequence files. */
-  private class SeqSource[K : Manifest, V : Manifest, A : Manifest : WireFormat](paths: List[String], converter: InputConverter[K, V, A], checkFileTypes: Boolean)
-    extends DataSource[K, V, A] {
+  def valueSource[V : SeqSchema](paths: Seq[String]) = {
+    val convV = implicitly[SeqSchema[V]]
 
-    private val inputPaths = paths.map(p => new Path(p))
+    val converter = new InputConverter[Writable, convV.SeqType, V] {
+      def fromKeyValue(context: InputContext, k: Writable, v: convV.SeqType) = convV.fromWritable(v)
+    }
+    new SeqSource(paths, defaultSequenceInputFormat, converter)
+  }
 
-    val inputFormat = classOf[SequenceFileInputFormat[K, V]]
+}
+object SequenceInput extends SequenceInput
 
-    /** Check if the input path exists, and optionally the expected key/value types match those in the file.
-      * For efficiency, the type checking will only check one file per dir */
-    def inputCheck(implicit sc: ScoobiConfiguration) {
-      inputPaths foreach { p =>
-        if (Helper.pathExists(p)(sc))
-          logger.info("Input path: " + p.toUri.toASCIIString + " (" + Helper.sizeString(Helper.pathSize(p)(sc)) + ")")
-        else
-          throw new IOException("Input path " + p + " does not exist.")
+/* Class that abstracts all the common functionality of reading from sequence files. */
+class SeqSource[K, V, A](paths: Seq[String],
+                         val inputFormat: Class[SequenceFileInputFormat[K, V]] = SequenceInput.defaultSequenceInputFormat,
+                         val inputConverter: InputConverter[K, V, A],
+                         checkFileTypes: Boolean = true,
+                         val check: Source.InputCheck = Source.defaultInputCheck)
+  extends DataSource[K, V, A] {
 
+  private val inputPaths = paths.map(p => new Path(p))
+
+  override def toString = "SeqSource("+id+")"+inputPaths.mkString("\n", "\n", "\n")
+
+  /** Check if the input path exists, and optionally the expected key/value types match those in the file.
+    * For efficiency, the type checking will only check one file per dir */
+  def inputCheck(implicit sc: ScoobiConfiguration) {
+    check(inputPaths, sc)
+    inputPaths foreach checkInputPathType
+  }
+
+<<<<<<< HEAD
         if (checkFileTypes)
           Helper.getSingleFilePerDir(p)(sc) foreach { filePath =>
             val seqReader: SequenceFile.Reader = new SequenceFile.Reader(filePath.getFileSystem(sc), filePath, sc)
@@ -149,18 +158,36 @@ object SequenceInput {
           }
       }
     }
+=======
+  protected def checkInputPathType(p: Path)(implicit sc: ScoobiConfiguration) {}
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
 
-    def checkType(actual: Class[_], expected: Class[_], typeStr: String) {
-      val msg = "Incompatible %s type in SequenceFile. Expecting '%s' to be equal to or a subclass of '%s'."
-      if (!expected.isAssignableFrom(actual)) throw new IOException(msg.format(typeStr, expected, actual))
-    }
+  def inputConfigure(job: Job)(implicit sc: ScoobiConfiguration) {
+    inputPaths foreach { p => FileInputFormat.addInputPath(job, p) }
+  }
 
-    def inputConfigure(job: Job)(implicit sc: ScoobiConfiguration) {
-      inputPaths foreach { p => FileInputFormat.addInputPath(job, p) }
-    }
+  def inputSize(implicit sc: ScoobiConfiguration): Long = inputPaths.map(p => Helper.pathSize(p)(sc)).sum
+}
 
-    def inputSize(implicit sc: ScoobiConfiguration): Long = inputPaths.map(p => Helper.pathSize(p)(sc)).sum
+/** This class can check if the source types are ok, based on the Manifest of the input types */
+class CheckedSeqSource[K : Manifest, V : Manifest, A](paths: Seq[String],
+                                                      override val inputFormat: Class[SequenceFileInputFormat[K, V]] = SequenceInput.defaultSequenceInputFormat,
+                                                      override val inputConverter: InputConverter[K, V, A], checkFileTypes: Boolean = true,
+                                                      override val check: Source.InputCheck = Source.defaultInputCheck) extends
+   SeqSource[K, V, A](paths, inputFormat, inputConverter, checkFileTypes, check) {
 
-    lazy val inputConverter = converter
+  override protected def checkInputPathType(p: Path)(implicit sc: ScoobiConfiguration) {
+    if (checkFileTypes)
+      Helper.getSingleFilePerDir(p)(sc) foreach { filePath =>
+        val seqReader: SequenceFile.Reader = Compatibility.newSequenceFileReader(sc, filePath)
+        checkType(seqReader.getKeyClass, manifest[K].runtimeClass, "KEY")
+        checkType(seqReader.getValueClass, manifest[V].runtimeClass, "VALUE")
+      }
+  }
+
+  private def checkType(actual: Class[_], expected: Class[_], typeStr: String) {
+    val msg = "Incompatible %s type in SequenceFile. Expecting '%s' to be equal to or a subclass of '%s'."
+    if (!expected.isAssignableFrom(actual)) throw new IOException(msg.format(typeStr, expected, actual))
   }
 }
+

@@ -25,7 +25,7 @@ package text
 private[scoobi]
 trait Plural {
 
-  /**@return a Noun object which can be pluralised */
+  /** @return a Noun object which can be pluralised */
   implicit def noun(s: String) = Noun(s)
 
   case class Noun(s: String) {

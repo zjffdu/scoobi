@@ -19,7 +19,7 @@ package rtt
 
 import org.apache.hadoop.io.Writable
 import core._
-import application.ScoobiConfiguration
+import impl.ScoobiConfiguration
 
 /**
  * A tagged value for Hadoop values. Specifically this will be a V2 type so must
@@ -31,7 +31,7 @@ trait TaggedValue extends Tagged with Writable
 
 /** Companion object for dynamically constructing a subclass of TaggedValue. */
 object TaggedValue {
-  def apply(name: String, tags: Map[Int, Tuple1[WireFormat[_]]])(implicit sc: ScoobiConfiguration): RuntimeClass =
+  def apply(name: String, tags: Map[Int, Tuple1[WireReaderWriter]])(implicit sc: ScoobiConfiguration): RuntimeClass =
     MetadataClassBuilder[MetadataTaggedValue](name, tags).toRuntimeClass
 }
 

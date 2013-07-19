@@ -16,67 +16,124 @@
 package com.nicta.scoobi
 package core
 
-import annotation.implicitNotFound
 import java.io._
-import impl.slow
 import org.apache.hadoop.io.Writable
 import collection.generic.CanBuildFrom
 import collection.mutable.{ListBuffer, Builder}
 import org.apache.avro.io.EncoderFactory
 import com.nicta.scoobi.io.avro.AvroSchema
-import org.apache.avro.mapred.{AvroKey, AvroWrapper}
-import org.apache.avro.hadoop.io.AvroSerialization
-import org.apache.hadoop.io.serializer.{Serializer, Deserializer}
-import org.apache.avro.reflect.ReflectDatumWriter
 import org.apache.avro.specific.{SpecificDatumReader, SpecificDatumWriter, SpecificData, SpecificRecordBase}
+import org.apache.avro.generic._
 import org.apache.avro.io.DecoderFactory
-import collection.mutable.ArrayBuffer
+import annotation.implicitNotFound
 
-/**Type-class for sending types across the Hadoop wire. */
+/** Typeclass for sending types across the Hadoop wire */
 @implicitNotFound(msg = "Cannot find WireFormat type class for ${A}")
-trait WireFormat[A] {
+trait WireFormat[A] extends WireReaderWriter { outer =>
+
+  def write(x: Any, out: DataOutput) { toWire(x.asInstanceOf[A], out) }
+  def read(in: DataInput) = fromWire(in)
+
   def toWire(x: A, out: DataOutput)
   def fromWire(in: DataInput): A
+
+  /**
+   * Map a pair of functions on this exponential functor to produce a new wire format.
+   */
+  def xmap[B](f: A => B, g: B => A): WireFormat[B] =
+    new WireFormat[B] {
+      def toWire(x: B, out: DataOutput) =
+        outer.toWire(g(x), out)
+
+      def fromWire(in: DataInput) =
+        f(outer.fromWire(in))
+
+      override def toString = outer.toString+"->B"
+    }
+
+  /**
+   * Produce a wire format on products from this wire format and the given wire format. Alias for `***`.
+   */
+  def zip[B](b: WireFormat[B]): WireFormat[(A, B)] = {
+    implicit val WA: WireFormat[A] = this
+    implicit val WB: WireFormat[B] = b
+    implicitly[WireFormat[(A, B)]]
+  }
+
+  /**
+   * Produce a wire format on products from this wire format and the given wire format. Alias for `zip`.
+   */
+  def ***[B](b: WireFormat[B]): WireFormat[(A, B)] =
+    zip(b)
+}
+
+trait WireReaderWriter { this: WireFormat[_] =>
+  def write(a: Any, out: DataOutput)
+  def read(in: DataInput): Any
+}
+
+object WireReaderWriter {
+  /** Performs a deep copy of an arbitrary object by first serialising then deserialising
+    * it via its WireFormat. */
+  def wireReaderWriterCopy(a: Any)(wf: WireReaderWriter): Any = {
+    import java.io._
+    val byteArrOs = new ByteArrayOutputStream()
+    wf.write(a, new DataOutputStream(byteArrOs))
+    wf.read(new DataInputStream(new ByteArrayInputStream(byteArrOs.toByteArray)))
+  }
+
 }
 
 object WireFormat extends WireFormatImplicits {
+  def pair(wf1: WireReaderWriter, wf2: WireReaderWriter): WireReaderWriter =
+    Tuple2Fmt(wf1.asInstanceOf[WireFormat[Any]], wf2.asInstanceOf[WireFormat[Any]])
 
-  // extend WireFormat with useful methods
-  implicit def wireFormat[A](wf: WireFormat[A]): WireFormatX[A] = new WireFormatX[A](wf)
+  def iterable(wf: WireReaderWriter): WireReaderWriter =
+    TraversableFmt(wf.asInstanceOf[WireFormat[Any]], implicitly[CanBuildFrom[_, Any, Iterable[_]]])
 
-  case class WireFormatX[A](wf: WireFormat[A]) {
-    /**
-     * transform a WireFormat[A] to a WireFormat[B] by providing a bijection A <=> B
-     */
-    def adapt[B](f: B => A, g: A => B): WireFormat[B] = new WireFormat[B] {
-      def fromWire(in: DataInput) = g(wf.fromWire(in))
-      def toWire(x: B, out: DataOutput) { wf.toWire(f(x), out) }
-    }
+  /** Performs a deep copy of an arbitrary object by first serialising then deserialising
+    * it via its WireFormat. */
+  def wireFormatCopy[A : WireFormat](a: A): A = {
+    import java.io._
+    val byteArrOs = new ByteArrayOutputStream()
+    wireFormat[A].toWire(a, new DataOutputStream(byteArrOs))
+    wireFormat[A].fromWire(new DataInputStream(new ByteArrayInputStream(byteArrOs.toByteArray())))
   }
+
+  def manifest[A](implicit mf: Manifest[A]): Manifest[A] = mf
+  def grouping[A](implicit gp: Grouping[A]): Grouping[A] = gp
+  def wireFormat[A](implicit wf: WireFormat[A]): WireFormat[A] = wf
+
+  def isTraversable[A : WireFormat] = implicitly[WireFormat[A]]
+  def isTraversable(wf: WireReaderWriter) = wf.isInstanceOf[WireFormat.TraversableWireFormat[_,_]]
 }
 
 /** Implicit definitions of WireFormat instances for common types. */
 trait WireFormatImplicits extends codegen.GeneratedWireFormats {
 
-  class ObjectWireFormat[T](val x: T) extends WireFormat[T] {
+  class ObjectWireFormat[T : Manifest](val x: T) extends WireFormat[T] {
     override def toWire(obj: T, out: DataOutput) {}
     override def fromWire(in: DataInput): T = x
+    override def toString = implicitly[Manifest[T]].runtimeClass.getSimpleName
   }
-  def mkObjectWireFormat[T](x: T): WireFormat[T] = new ObjectWireFormat(x)
+  def mkObjectWireFormat[T : Manifest](x: T): WireFormat[T] = new ObjectWireFormat(x)
 
-  class Case0WireFormat[T](val apply: () => T, val unapply: T => Boolean) extends WireFormat[T] {
+  class Case0WireFormat[T : Manifest](val apply: () => T, val unapply: T => Boolean) extends WireFormat[T] {
     override def toWire(obj: T, out: DataOutput) {}
     override def fromWire(in: DataInput): T = apply()
+    override def toString = implicitly[Manifest[T]].runtimeClass.getSimpleName
   }
 
-  def mkCaseWireFormat[T](apply: () => T, unapply: T => Boolean): WireFormat[T] = new Case0WireFormat(apply, unapply)
+  def mkCaseWireFormat[T : Manifest](apply: () => T, unapply: T => Boolean): WireFormat[T] = new Case0WireFormat(apply, unapply)
 
   class Case1WireFormat[T, A1: WireFormat](apply: (A1) => T, unapply: T => Option[(A1)]) extends WireFormat[T] {
     override def toWire(obj: T, out: DataOutput) {
       implicitly[WireFormat[A1]].toWire(unapply(obj).get, out)
     }
     override def fromWire(in: DataInput): T = apply(implicitly[WireFormat[A1]].fromWire(in))
+    override def toString = implicitly[WireFormat[A1]].toString
   }
+
   def mkCaseWireFormat[T, A1: WireFormat](apply: (A1) => T, unapply: T => Option[(A1)]): WireFormat[T] = new Case1WireFormat(apply, unapply)
 
   /**
@@ -86,7 +143,8 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
    * Note that this WireFormat instance definition is *not* implicit, meaning that you will need to explicitely
    * import it when you need it.
    */
-  def AnythingFmt[T <: Serializable] = new WireFormat[T] {
+  def AnythingFmt[T <: Serializable]: WireFormat[T] = new AnythingWireFormat[T]
+  class AnythingWireFormat[T <: Serializable] extends WireFormat[T] {
     def toWire(x: T, out: DataOutput) {
       val bytesOut = new ByteArrayOutputStream
       val bOut = new ObjectOutputStream(bytesOut)
@@ -106,31 +164,35 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
       val bIn = new ObjectInputStream(new ByteArrayInputStream(barr))
       bIn.readObject.asInstanceOf[T]
     }
+    override def toString = "Any"
   }
 
   /**
    * Hadoop Writable types.
    */
-  implicit def WritableFmt[T <: Writable: Manifest] = new WireFormat[T] {
+  implicit def WritableFmt[T <: Writable : Manifest] = new WireFormat[T] {
     def toWire(x: T, out: DataOutput) { x.write(out) }
     def fromWire(in: DataInput): T = {
 
-      val x: T = try { implicitly[Manifest[T]].erasure.newInstance.asInstanceOf[T] } catch {
+      val x: T = try { implicitly[Manifest[T]].runtimeClass.newInstance.asInstanceOf[T] } catch {
         case _: Throwable =>
           sys.error("Hadoop does not support using a Writable type (" +
-            implicitly[Manifest[T]].erasure.getCanonicalName() +
+            implicitly[Manifest[T]].runtimeClass.getCanonicalName() +
             ") unless it can be constructed with an empty-argument constructor. One simple way to get around this," +
             " is by creating a new type by inheriting from, and making sure that subclass has a (working) no-argument constructor")
       }
       x.readFields(in)
       x
     }
+    override def toString = "Writable["+implicitly[Manifest[T]].runtimeClass.getSimpleName+"]"
   }
   
   /**
-   * Avro types
+   * WireFormat instance for Avro Specific Records
+   *
+   * This requires an implicit AvroSchema instance
    */
-   implicit def AvroFmt[T <: SpecificRecordBase : Manifest : AvroSchema] = new AvroWireFormat[T]
+  implicit def AvroFmt[T <: SpecificRecordBase : Manifest : AvroSchema] = new AvroWireFormat[T]
   class AvroWireFormat[T <: SpecificRecordBase : Manifest : AvroSchema] extends WireFormat[T] {
     def toWire(x : T, out : DataOutput) {
       val sch = implicitly[AvroSchema[T]].schema
@@ -151,58 +213,108 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
       val reader : SpecificDatumReader[T] = new SpecificDatumReader(sch)
       reader.read(null.asInstanceOf[T], decoder)
     }
+    override def toString = "Avro["+implicitly[Manifest[T]].runtimeClass.getSimpleName+"]"
+  }
+
+  /**
+   * WireFormat instance for Avro Generic Records
+   *
+   * No implicit AvroSchema instance is required. A dummy schema is used to start the reading of the file
+   * and then the GenericAvroKeyRecordWriter/GenericAvroKeyRecordReader will inspect the schema that is defined by the
+   * first generic record that is written / read to instance an appropriate AvroKeyRecordWriter/AvroKeyRecordReader
+   */
+  implicit def GenericAvroFmt[T <: GenericRecord] = new GenericAvroWireFormat[T]
+  class GenericAvroWireFormat[T <: GenericRecord] extends WireFormat[T] {
+    def toWire(x : T, out : DataOutput) {
+      val bytestream = new ByteArrayOutputStream()
+      val encoder = EncoderFactory.get.directBinaryEncoder(bytestream, null)
+      val writer = new GenericDatumWriter[T](x.getSchema)
+      writer.write(x, encoder)
+      val outbytes = bytestream.toByteArray()
+      out.writeInt(outbytes.size)
+      out.write(outbytes)
+    }
+    def fromWire(in : DataInput) : T = {
+      val size = in.readInt
+      val bytes : Array[Byte] = new Array[Byte](size)
+      in.readFully(bytes)
+      val decoder = DecoderFactory.get.directBinaryDecoder(new ByteArrayInputStream(bytes), null)
+      // this uses a dummy schema, the real one is read by the GenericAvroKeyInputReader
+      val reader = new GenericDatumReader[T](AvroSchema.mkRecordSchema(Seq(implicitly[AvroSchema[Int]])))
+      reader.read(null.asInstanceOf[T], decoder)
+    }
+    override def toString = "GenericAvro"
   }
 
 
   /**
    * "Primitive" types.
    */
-  implicit def UnitFmt = new WireFormat[Unit] {
+  implicit def UnitFmt = new UnitWireFormat
+  class UnitWireFormat extends WireFormat[Unit] {
     def toWire(x: Unit, out: DataOutput) {}
     def fromWire(in: DataInput): Unit = ()
+    override def toString = "Unit"
   }
 
-  implicit def IntFmt = new WireFormat[Int] {
+  implicit def IntFmt = new IntWireFormat
+  class IntWireFormat extends WireFormat[Int] {
     def toWire(x: Int, out: DataOutput) { out.writeInt(x) }
     def fromWire(in: DataInput): Int = in.readInt()
+    override def toString = "Int"
   }
 
-  implicit def IntegerFmt: WireFormat[java.lang.Integer] = new WireFormat[java.lang.Integer] {
+  implicit def IntegerFmt: WireFormat[java.lang.Integer] = new IntegerWireFormat
+  class IntegerWireFormat extends WireFormat[java.lang.Integer] {
     def toWire(x: java.lang.Integer, out: DataOutput) { out.writeInt(x) }
     def fromWire(in: DataInput): java.lang.Integer = in.readInt()
+    override def toString = "Integer"
   }
 
-  implicit def BooleanFmt = new WireFormat[Boolean] {
+  implicit def BooleanFmt = new BooleanWireFormat
+  class BooleanWireFormat extends WireFormat[Boolean] {
     def toWire(x: Boolean, out: DataOutput) { out.writeBoolean(x) }
     def fromWire(in: DataInput): Boolean = in.readBoolean()
+    override def toString = "Boolean"
   }
 
-  implicit def LongFmt = new WireFormat[Long] {
+  implicit def LongFmt = new LongWireFormat
+  class LongWireFormat extends WireFormat[Long] {
     def toWire(x: Long, out: DataOutput) { out.writeLong(x) }
     def fromWire(in: DataInput): Long = in.readLong()
+    override def toString = "Long"
   }
 
-  implicit def DoubleFmt = new WireFormat[Double] {
+  implicit def DoubleFmt = new DoubleWireFormat
+  class DoubleWireFormat extends WireFormat[Double] {
     def toWire(x: Double, out: DataOutput) { out.writeDouble(x) }
     def fromWire(in: DataInput): Double = { in.readDouble() }
+    override def toString = "Float"
   }
 
-  implicit def FloatFmt = new WireFormat[Float] {
+  implicit def FloatFmt = new FloatWireFormat
+  class FloatWireFormat extends WireFormat[Float] {
     def toWire(x: Float, out: DataOutput) { out.writeFloat(x) }
     def fromWire(in: DataInput): Float = { in.readFloat() }
+    override def toString = "Float"
   }
 
-  implicit def CharFmt = new WireFormat[Char] {
+  implicit def CharFmt = new CharWireFormat
+  class CharWireFormat extends WireFormat[Char] {
     def toWire(x: Char, out: DataOutput) { out.writeChar(x) }
     def fromWire(in: DataInput): Char = in.readChar()
+    override def toString = "Char"
   }
 
-  implicit def ByteFmt = new WireFormat[Byte] {
+  implicit def ByteFmt = new ByteWireFormat
+  class ByteWireFormat extends WireFormat[Byte] {
     def toWire(x: Byte, out: DataOutput) { out.writeByte(x) }
     def fromWire(in: DataInput): Byte = in.readByte()
+    override def toString = "Byte"
   }
 
-  implicit def StringFmt: WireFormat[String] = new WireFormat[String] {
+  implicit def StringFmt: WireFormat[String] = new StringWireFormat
+  class StringWireFormat extends WireFormat[String] {
     def toWire(x: String, out: DataOutput) {
       if (x == null)
         out.writeInt(-1)
@@ -222,6 +334,7 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
         new String(b, "utf-8")
       }
     }
+    override def toString = "String"
   }
 
   /*
@@ -242,12 +355,12 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
 
   /* Arrays */
   implicit def ArrayFmt[T](implicit m: Manifest[T], wt: WireFormat[T]): WireFormat[Array[T]] =
-    new TraversableWireFormat(new ListBuffer[T]) adapt ((a: Array[T]) => a.toList, (s: List[T]) => s.toArray)
+    new TraversableWireFormat(new ListBuffer[T]) xmap ((s: List[T]) => s.toArray, (a: Array[T]) => a.toList)
 
   /**
    * This class is used to create a WireFormat for Traversables, Maps and Arrays
    */
-  private[scoobi] case class TraversableWireFormat[T: WireFormat, CC <: Traversable[T]](builder: Builder[T, CC]) extends WireFormat[CC] {
+  private[scoobi] case class TraversableWireFormat[T : WireFormat, CC <: Traversable[T]](builder: Builder[T, CC]) extends WireFormat[CC] {
     def toWire(x: CC, out: DataOutput) = {
       require(x != null, "Cannot serialise a null Traversable. Consider using an empty collection, or an Option[Traversable]")
       // The "naive" approach for persisting a Traversable would be to persist the number of elements, then the
@@ -273,6 +386,8 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
       }
       builder.result()
     }
+
+    override def toString = "Traversable["+implicitly[WireFormat[T]]+"]"
   }
 
   /**
@@ -292,6 +407,7 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
         None
       }
     }
+    override def toString = "Option["+wt+"]"
   }
 
   /*
@@ -313,16 +429,7 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
         Right(x)
       }
     }
-  }
-
-  implicit def LeftFmt[T1, T2](implicit wt1: WireFormat[T1]) = new WireFormat[Left[T1, T2]] {
-    def toWire(x: Left[T1, T2], out: DataOutput) = wt1.toWire(x.a, out)
-    def fromWire(in: DataInput): Left[T1, T2] = Left[T1, T2](wt1.fromWire(in))
-  }
-
-  implicit def RightFmt[T1, T2](implicit wt1: WireFormat[T2]) = new WireFormat[Right[T1, T2]] {
-    def toWire(x: Right[T1, T2], out: DataOutput) = wt1.toWire(x.b, out)
-    def fromWire(in: DataInput): Right[T1, T2] = Right[T1, T2](wt1.fromWire(in))
+    override def toString = "Either["+wt1+","+wt2+"]"
   }
 
   /**
@@ -331,12 +438,26 @@ trait WireFormatImplicits extends codegen.GeneratedWireFormats {
   implicit def DateFmt = new WireFormat[java.util.Date] {
     def toWire(x: java.util.Date, out: DataOutput) = out.writeLong(x.getTime)
     def fromWire(in: DataInput): java.util.Date = new java.util.Date(in.readLong())
+    override def toString = "Date"
   }
 
-  /*
-   * Shapeless tagged types.
-   */
-  import shapeless.TypeOperators._
+  /**  Shapeless tagged types */
+  import scalaz.@@
   implicit def taggedTypeWireFormat[T : WireFormat, U]: WireFormat[T @@ U] =
     implicitly[WireFormat[T]].asInstanceOf[WireFormat[T @@ U]]
+
+  import shapeless._
+
+  implicit def hnilHasWireFormat: WireFormat[HNil] = new WireFormat[HNil] {
+    def toWire(x: HNil, out: DataOutput) {}
+    def fromWire(in: DataInput) = HNil
+  }
+
+  implicit def hlistHasWireFormat[T, H1 <: HList](implicit wft: WireFormat[T], wfh1: WireFormat[H1]): WireFormat[T :: H1] = new WireFormat[T :: H1] {
+    def toWire(hlist: T :: H1, out: DataOutput) = hlist match {
+      case head :: rest => wft.toWire(head, out); wfh1.toWire(rest, out)
+    }
+    def fromWire(in: DataInput) = wft.fromWire(in) :: wfh1.fromWire(in)
+  }
+
 }

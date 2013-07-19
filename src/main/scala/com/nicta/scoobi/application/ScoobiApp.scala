@@ -16,9 +16,8 @@
 package com.nicta.scoobi
 package application
 
-import io.FileSystems
-import impl.reflect.Classes._
-import impl.reflect.Classes
+import impl.io.FileSystems
+import impl.reflect.{ClasspathDiagnostics, Classes}
 import org.apache.commons.logging.LogFactory
 import impl.monitor.Loggable._
 /**
@@ -45,7 +44,7 @@ import impl.monitor.Loggable._
  * (if not already there, @see LibJars for the details). This behavior can be switched off by overriding the `upload`
  * method: `override def upload = false` or by passing the 'nolibjars' argument on the command line
  */
-trait ScoobiApp extends ScoobiCommandLineArgs with ScoobiAppConfiguration with Hadoop with HadoopLogFactoryInitialisation {
+trait ScoobiApp extends ScoobiCommandLineArgs with ScoobiAppConfiguration with Hadoop with HadoopLogFactoryInitialisation with Persist {
 
   private implicit lazy val logger = LogFactory.getLog("scoobi.ScoobiApp")
 
@@ -71,8 +70,11 @@ trait ScoobiApp extends ScoobiCommandLineArgs with ScoobiAppConfiguration with H
    *  - execute the user code
    */
   def main(arguments: Array[String]) {
+
     parseHadoopArguments(arguments)
     onHadoop {
+      // print out the urls of the most important jars for Java, Hadoop, Avro, Scoobi
+      ClasspathDiagnostics.logInfo
       // uploading the jars must only be done when the configuration is fully setup with "onHadoop"
       if (!locally) uploadLibJarsFiles(deleteLibJarsFirst = deleteLibJars)
       try { run }
@@ -80,11 +82,13 @@ trait ScoobiApp extends ScoobiCommandLineArgs with ScoobiAppConfiguration with H
     }
   }
 
-  private def parseHadoopArguments(arguments: Array[String]) {
+  protected def parseHadoopArguments(arguments: Array[String]) {
     // arguments need to be stored before the configuration is even created
     // so that we know if configuration files must be read or not
     set(arguments)
     HadoopLogFactory.setLogFactory(classOf[HadoopLogFactory].getName, quiet, showTimes, level, categories)
+    configuration.set("mapred.map.child.log.level", level)
+    configuration.set("mapred.reduce.child.log.level", level)
 
     logger.debug("parsing the hadoop arguments "+ arguments.mkString(", "))
     configuration.withHadoopArgs(arguments) { remainingArgs =>
@@ -95,7 +99,7 @@ trait ScoobiApp extends ScoobiCommandLineArgs with ScoobiAppConfiguration with H
   }
 
   /** upload the jars unless 'nolibjars' has been set on the command-line' */
-  override lazy val upload: Boolean = (!noLibJars && !mainJarContainsDependencies).
+  override def upload: Boolean = (isCluster && !noLibJars && !mainJarContainsDependencies).
     debug("upload is ", " because nolibjars is: "+noLibJars+" and the main jar is a 'fat' jar: "+mainJarContainsDependencies)
 
 

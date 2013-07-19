@@ -17,8 +17,12 @@ package com.nicta.scoobi
 package application
 
 import org.apache.hadoop.fs.FileSystem
+import core._
 import Mode._
 import org.apache.commons.logging.LogFactory
+import impl.ScoobiConfiguration._
+import impl.reflect.Classes
+import com.nicta.scoobi.impl.util.Compatibility
 
 /**
  * This trait provides methods to execute map-reduce code, either locally or on the cluster.
@@ -37,18 +41,22 @@ trait Hadoop extends LocalHadoop with Cluster with LibJars { outer =>
   def includeLibJars = false
 
   /** @return the classes directories to include on a job classpath */
-  def classDirs: Seq[String] = Seq("classes", "test-classes").map("target/scala-"+util.Properties.releaseVersion.getOrElse("2.9.2")+"/"+_)
+  def classDirs: Seq[String] = {
+    val classesDirectory = Classes.findContainingDirectory(classOf[ScoobiApp]).getOrElse("target/scala-2.10/classes/")
+    val targetScalaDirectory = classesDirectory.replace("classes/", "")
+    Seq("classes", "test-classes").map(targetScalaDirectory+_)
+  }
 
   /** execute some code on the cluster, possibly showing the execution time */
   def onCluster[T](t: =>T)(implicit configuration: ScoobiConfiguration) =
     showTime(executeOnCluster(t))(displayTime("Cluster execution time"))
 
   /** execute some code, either locally or on the cluster, depending on the local argument being passed on the commandline */
-  def onHadoop[T](t: =>T)(implicit configuration: ScoobiConfiguration) =
+  def onHadoop[T](t: =>T)(implicit configuration: ScoobiConfiguration) = {
     if (isInMemory)   inMemory(t)
     else if (isLocal) onLocal(t)
     else              onCluster(t)
-
+  }
 
   /**
    * execute some code on the cluster, setting the filesystem / jobtracker addresses and setting up the classpath
@@ -62,16 +70,18 @@ trait Hadoop extends LocalHadoop with Cluster with LibJars { outer =>
    * @return a configuration with cluster setup
    */
   def configureForCluster(implicit configuration: ScoobiConfiguration): ScoobiConfiguration = {
+    setLogFactory()
+    configureArguments
+
     logger.debug("setting the configuration for cluster execution")
 
-    setLogFactory()
     if (!configuration.jobName.isDefined) configuration.jobNameIs(getClass.getSimpleName)
 
     logger.debug("setting the execution mode to "+Cluster)
     configuration.modeIs(Cluster)
 
     logger.debug("the file system is "+fs)
-    configuration.set(FileSystem.FS_DEFAULT_NAME_KEY, fs)
+    configuration.set(Compatibility.defaultFSKeyName, fs)
 
     logger.debug("the job tracker is "+jobTracker)
     configuration.set("mapred.job.tracker", jobTracker)

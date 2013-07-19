@@ -21,28 +21,37 @@ import org.apache.hadoop.mapreduce._
 import lib.input.InvalidInputException
 import org.apache.hadoop.filecache.DistributedCache
 
-import application.ScoobiConfiguration
+import core._
+import testing.TestFiles
+import org.apache.hadoop.io.Writable
+import java.io.{File, DataOutput, DataInput}
 
-class ConstantStringDataSource(value: String) extends DataSource[String, String, String] {
+class ConstantStringDataSource(val value: String) extends DataSource[String, String, String] {
+
+  override def toString = "ConstantString("+id+")"
 
   def inputFormat: Class[_ <: InputFormat[String, String]] = classOf[ConstantStringInputFormat]
   def inputCheck(implicit sc: ScoobiConfiguration) {}
   def inputConfigure(job: Job)(implicit sc: ScoobiConfiguration) {
     job.getConfiguration.set("mapred.constant.string", "value")
-    DistributedCache.addCacheFile(new java.net.URI("string"), job.getConfiguration)
   }
   def inputSize(implicit sc: ScoobiConfiguration): Long = value.size
   lazy val inputConverter = ConstantStringInputConverter(value)
-
-  case class ConstantStringInputSplit(value: String) extends InputSplit {
-    def getLength = value.size
-    def getLocations = Array[String]()
-  }
 
   case class ConstantStringInputConverter(value: String) extends InputConverter[String, String, String] {
     def fromKeyValue(context: this.type#InputContext, key: String, v: String) = value
   }
 }
+case class ConstantStringInputSplit(var value: String) extends InputSplit with Writable {
+  def this() = this("")
+  def getLength = value.size
+  def readFields(in: DataInput) {}
+
+  def write(out: DataOutput) { out.writeChars(value) }
+  def getLocations = Array("localhost")
+}
+
+
 object ConstantStringDataSource {
   def apply(value: String) = new ConstantStringDataSource(value)
 }
@@ -52,30 +61,25 @@ class FailingDataSource extends ConstantStringDataSource("") {
 object FailingDataSource {
   def apply() = new FailingDataSource
 }
-case class ConstantStringRecordReader(value: String) extends RecordReader[String, String] {
-  def this() = this("")
-  def initialize(split: InputSplit, context: TaskAttemptContext) {}
-  def nextKeyValue() = false
+class ConstantStringRecordReader(value: String) extends RecordReader[String, String] {
+  private var read = false
+  def this() = this("value")
+  def initialize(split: InputSplit, context: TaskAttemptContext) { read = false }
+  def nextKeyValue() = !read
   def getCurrentKey = value
-  def getCurrentValue = value
+  def getCurrentValue = { read = true; value }
   def getProgress = 0.0f
-  def close() {}
+  def close() { read = false }
 }
 
-class ConstantStringInputFormat(value: String) extends InputFormat[String, String] {
-  def this() = this("")
+case class ConstantStringInputFormat(value: String) extends InputFormat[String, String] {
+  def this() = this("value")
   def getSplits(context: JobContext) = asList(ConstantStringInputSplit(value))
-  def createRecordReader(split: InputSplit, context: TaskAttemptContext) = ConstantStringRecordReader(value)
+  def createRecordReader(split: InputSplit, context: TaskAttemptContext) = new ConstantStringRecordReader(value)
 }
 
 class FailingInputFormat extends InputFormat[String, String] {
   def getSplits(context: JobContext) = { throw new InvalidInputException(asList()); asList() }
-  def createRecordReader(split: InputSplit, context: TaskAttemptContext) = ConstantStringRecordReader("")
+  def createRecordReader(split: InputSplit, context: TaskAttemptContext) = new ConstantStringRecordReader("")
 }
-
-case class ConstantStringInputSplit(value: String) extends InputSplit {
-  def getLength = value.size
-  def getLocations = Array("localhost")
-}
-
 

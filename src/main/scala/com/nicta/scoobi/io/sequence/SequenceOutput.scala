@@ -23,107 +23,143 @@ import org.apache.hadoop.io.Writable
 import org.apache.hadoop.io.NullWritable
 import org.apache.hadoop.mapred.FileAlreadyExistsException
 import org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
 import org.apache.hadoop.mapreduce.Job
 
-import application.DListPersister
 import core._
-import application.ScoobiConfiguration
+import impl.ScoobiConfiguration._
+import impl.io.Helper
+import org.apache.hadoop.conf.Configuration
+import impl.ScoobiConfigurationImpl
+import core.ScoobiConfiguration
+import org.apache.hadoop.io.compress.CompressionCodec
+import org.apache.hadoop.io.SequenceFile.CompressionType
 
 /** Smart functions for persisting distributed lists by storing them as Sequence files. */
-object SequenceOutput {
-  lazy val logger = LogFactory.getLog("scoobi.SequenceOutput")
+trait SequenceOutput {
 
-  /** Specify a distributed list to be persistent by converting its elements to Writables and storing it
-    * to disk as the "key" component in a Sequence File. */
-  def convertKeyToSequenceFile[K](dl: DList[K], path: String, overwrite: Boolean = false)(implicit convK: SeqSchema[K]): DListPersister[K] = {
+  /**
+   * Specify a distributed list to be persistent by converting its elements to Writables and storing it
+   * to disk as the "key" component in a Sequence File.
+   *  @deprecated(message="use list.keyToSequenceFile(...) instead", since="0.7.0")
+   */
+  def keyToSequenceFile[K](dl: DList[K], path: String, overwrite: Boolean = false, check: Sink.OutputCheck = Sink.defaultOutputCheck)(implicit convK: SeqSchema[K]) =
+    dl.addSink(keySchemaSequenceFile(path, overwrite, check))
 
-    val keyClass = convK.mf.erasure.asInstanceOf[Class[convK.SeqType]]
+  def keySchemaSequenceFile[K](path: String, overwrite: Boolean = false, check: Sink.OutputCheck = Sink.defaultOutputCheck)(implicit convK: SeqSchema[K]) = {
+
+    val keyClass = convK.mf.runtimeClass.asInstanceOf[Class[convK.SeqType]]
     val valueClass = classOf[NullWritable]
 
-    val converter = new OutputConverter[convK.SeqType, NullWritable, K] {
-      def toKeyValue(k: K) = (convK.toWritable(k), NullWritable.get)
+    val converter = new InputOutputConverter[convK.SeqType, NullWritable, K] {
+      def fromKeyValue(context: InputContext, k: convK.SeqType, v: NullWritable) = convK.fromWritable(k)
+      def toKeyValue(kv: K)(implicit configuration: Configuration) = kv match {
+        case (k1, _) => (convK.toWritable(k1.asInstanceOf[K]), NullWritable.get)
+        case k1      => (convK.toWritable(k1.asInstanceOf[K]), NullWritable.get)
+      }
     }
-
-    new DListPersister(dl, new SeqSink[convK.SeqType, NullWritable, K](path, keyClass, valueClass, converter, overwrite))
+    new SeqSink[convK.SeqType, NullWritable, K](path, keyClass, valueClass, converter, overwrite, check)
   }
 
+  /**
+   * Specify a distributed list to be persistent by converting its elements to Writables and storing it
+   * to disk as the "value" component in a Sequence File.
+   *  @deprecated(message="use list.valueToSequenceFile(...) instead", since="0.7.0")
+   */
+  def valueToSequenceFile[V](dl: DList[V], path: String, overwrite: Boolean = false, check: Sink.OutputCheck = Sink.defaultOutputCheck, checkpoint: Boolean = false)(implicit convV: SeqSchema[V], sc: ScoobiConfiguration) =
+    dl.addSink(valueSchemaSequenceFile(path, overwrite, check, checkpoint))
 
-  /** Specify a distributed list to be persistent by converting its elements to Writables and storing it
-    * to disk as the "value" component in a Sequence File. */
-  def convertValueToSequenceFile[V](dl: DList[V], path: String, overwrite: Boolean = false)(implicit convV: SeqSchema[V]): DListPersister[V] = {
-
+  def valueSchemaSequenceFile[V](path: String, overwrite: Boolean = false, check: Sink.OutputCheck = Sink.defaultOutputCheck, checkpoint: Boolean = false, expiryPolicy: ExpiryPolicy = ExpiryPolicy.default)(implicit convV: SeqSchema[V], sc: ScoobiConfiguration) = {
     val keyClass = classOf[NullWritable]
-    val valueClass = convV.mf.erasure.asInstanceOf[Class[convV.SeqType]]
+    val valueClass = convV.mf.runtimeClass.asInstanceOf[Class[convV.SeqType]]
 
-    val converter = new OutputConverter[NullWritable, convV.SeqType, V] {
-      def toKeyValue(v: V) = (NullWritable.get, convV.toWritable(v))
+    val converter = new InputOutputConverter[NullWritable, convV.SeqType, V] {
+      def fromKeyValue(context: InputContext, k: NullWritable, v: convV.SeqType) = convV.fromWritable(v)
+      def toKeyValue(kv: V)(implicit configuration: Configuration) = kv match {
+        case (_,v) => (NullWritable.get, convV.toWritable(v.asInstanceOf[V]))
+        case v     => (NullWritable.get, convV.toWritable(v.asInstanceOf[V]))
+      }
     }
-
-    new DListPersister(dl, new SeqSink[NullWritable, convV.SeqType, V](path, keyClass, valueClass, converter, overwrite))
+    new SeqSink[NullWritable, convV.SeqType, V](path, keyClass, valueClass, converter, overwrite, check, Checkpoint.create(Some(path), expiryPolicy, checkpoint))
   }
 
+  /**
+   * Specify a distributed list to be persistent by converting its elements to Writables and storing it
+   * to disk as "key-values" in a Sequence File
+   * @deprecated(message="use list.toSequenceFile(...) instead", since="0.7.0")
+   */
+  def toSequenceFile[K, V](dl: DList[(K, V)], path: String, overwrite: Boolean = false, check: Sink.OutputCheck = Sink.defaultOutputCheck, checkpoint: Boolean = false)(implicit convK: SeqSchema[K], convV: SeqSchema[V], sc: ScoobiConfiguration) =
+    dl.addSink(schemaSequenceSink(path, overwrite, check, checkpoint)(convK, convV, sc))
 
-  /** Specify a distributed list to be persistent by converting its elements to Writables and storing it
-    * to disk as "key-values" in a Sequence File. */
-  def convertToSequenceFile[K, V](dl: DList[(K, V)], path: String, overwrite: Boolean = false)(implicit convK: SeqSchema[K], convV: SeqSchema[V]): DListPersister[(K, V)] = {
+  def schemaSequenceSink[K, V](path: String, overwrite: Boolean = false,
+                               check: Sink.OutputCheck = Sink.defaultOutputCheck,
+                               checkpoint: Boolean = false, expiryPolicy: ExpiryPolicy = ExpiryPolicy.default)(implicit convK: SeqSchema[K], convV: SeqSchema[V], sc: ScoobiConfiguration)= {
 
-    val keyClass = convK.mf.erasure.asInstanceOf[Class[convK.SeqType]]
-    val valueClass = convV.mf.erasure.asInstanceOf[Class[convV.SeqType]]
+    val keyClass = convK.mf.runtimeClass.asInstanceOf[Class[convK.SeqType]]
+    val valueClass = convV.mf.runtimeClass.asInstanceOf[Class[convV.SeqType]]
 
-    val converter = new OutputConverter[convK.SeqType, convV.SeqType, (K, V)] {
-      def toKeyValue(kv: (K, V)) = (convK.toWritable(kv._1), convV.toWritable(kv._2))
+    val converter = new InputOutputConverter[convK.SeqType, convV.SeqType, (K, V)] {
+      def fromKeyValue(context: InputContext, k: convK.SeqType, v: convV.SeqType) = (convK.fromWritable(k), convV.fromWritable(v))
+      def toKeyValue(kv: (K, V))(implicit configuration: Configuration) = (convK.toWritable(kv._1), convV.toWritable(kv._2))
     }
-
-    new DListPersister(dl, new SeqSink[convK.SeqType, convV.SeqType, (K, V)](path, keyClass, valueClass, converter, overwrite))
+    new SeqSink[convK.SeqType, convV.SeqType, (K, V)](path, keyClass, valueClass, converter, overwrite, check, Checkpoint.create(Some(path), expiryPolicy, checkpoint)) with SinkSource {
+      def toSource = new SeqSource(Seq(path), SequenceInput.defaultSequenceInputFormat, converter)
+    }
   }
 
+  def sequenceSink[K <: Writable, V <: Writable](path: String, overwrite: Boolean = false,
+                                                 check: Sink.OutputCheck = Sink.defaultOutputCheck,
+                                                 checkpoint: Boolean = false, expiryPolicy: ExpiryPolicy = ExpiryPolicy.default)(
+      implicit mk: Manifest[K], mv: Manifest[V], sc: ScoobiConfiguration) = {
+    val keyClass = mk.runtimeClass.asInstanceOf[Class[K]]
+    val valueClass = mv.runtimeClass.asInstanceOf[Class[V]]
 
-  /** Specify a distributed list to be persistent by storing it to disk as a Sequence File. */
-  def toSequenceFile[K <: Writable : Manifest, V <: Writable : Manifest](dl: DList[(K, V)], path: String, overwrite: Boolean = false): DListPersister[(K, V)] = {
-
-    val keyClass = implicitly[Manifest[K]].erasure.asInstanceOf[Class[K]]
-    val valueClass = implicitly[Manifest[V]].erasure.asInstanceOf[Class[V]]
-
-    val converter = new OutputConverter[K, V, (K, V)] {
-      def toKeyValue(kv: (K, V)) = (kv._1, kv._2)
+    val converter = new InputOutputConverter[K, V, (K, V)] {
+      def fromKeyValue(context: InputContext, k: K, v: V) = (k, v)
+      def toKeyValue(kv: (K, V))(implicit configuration: Configuration) = (kv._1, kv._2)
     }
-
-    new DListPersister(dl, new SeqSink[K, V, (K, V)](path, keyClass, valueClass, converter, overwrite))
+    new SeqSink[K, V, (K, V)](path, keyClass, valueClass, converter, overwrite, check, Checkpoint.create(Some(path), expiryPolicy, checkpoint)) with SinkSource {
+      def toSource = new SeqSource(Seq(path), SequenceInput.defaultSequenceInputFormat, converter)
+    }
   }
 
+}
 
-  /* Class that abstracts all the common functionality of persisting to sequence files. */
-  private class SeqSink[K, V, B](
-      path: String,
-      keyClass: Class[K],
-      valueClass: Class[V],
-      converter: OutputConverter[K, V, B],
-      overwrite: Boolean)
-    extends DataSink[K, V, B] {
+object SequenceOutput extends SequenceOutput
 
-    protected val outputPath = new Path(path)
+/** class that abstracts all the common functionality of persisting to sequence files. */
+case class SeqSink[K, V, B](path: String,
+                            keyClass: Class[K],
+                            valueClass: Class[V],
+                            outputConverter: InputOutputConverter[K, V, B],
+                            overwrite: Boolean,
+                            check: Sink.OutputCheck = Sink.defaultOutputCheck,
+                            checkpoint: Option[Checkpoint] = None,
+                            compression: Option[Compression] = None) extends DataSink[K, V, B] {
 
-    val outputFormat = classOf[SequenceFileOutputFormat[K, V]]
-    val outputKeyClass = keyClass
-    val outputValueClass = valueClass
+  private lazy val logger = LogFactory.getLog("scoobi.SequenceOutput")
 
-    def outputCheck(implicit sc: ScoobiConfiguration) {
-      if (Helper.pathExists(outputPath)(sc))
-        if (overwrite) {
-          logger.info("Deleting the pre-existing output path: " + outputPath.toUri.toASCIIString)
-          Helper.deletePath(outputPath)(sc)
-        } else {
-          throw new FileAlreadyExistsException("Output path already exists: " + outputPath)
-        }
-      else
-        logger.info("Output path: " + outputPath.toUri.toASCIIString)
-    }
+  protected val output = new Path(path)
 
-    def outputConfigure(job: Job)(implicit sc: ScoobiConfiguration) {
-      FileOutputFormat.setOutputPath(job, outputPath)
-    }
+  def outputFormat(implicit sc: ScoobiConfiguration) = classOf[SequenceFileOutputFormat[K, V]]
+  def outputKeyClass(implicit sc: ScoobiConfiguration) = keyClass
+  def outputValueClass(implicit sc: ScoobiConfiguration) = valueClass
 
-    lazy val outputConverter = converter
+  def outputCheck(implicit sc: ScoobiConfiguration) {
+    check(output, overwrite, sc)
   }
+  def outputPath(implicit sc: ScoobiConfiguration) = Some(output)
+
+  def outputConfigure(job: Job)(implicit sc: ScoobiConfiguration) {}
+
+  override def outputSetup(implicit sc: ScoobiConfiguration) {
+    super.outputSetup(sc)
+    if (Helper.pathExists(output)(sc.configuration) && overwrite) {
+      logger.info("Deleting the pre-existing output path: " + output.toUri.toASCIIString)
+      Helper.deletePath(output)(sc.configuration)
+    }
+  }
+
+  def compressWith(codec: CompressionCodec, compressionType: CompressionType = CompressionType.BLOCK) = copy(compression = Some(Compression(codec, compressionType)))
+
+  override def toString = getClass.getSimpleName+": "+outputPath(new ScoobiConfigurationImpl).getOrElse("none")
 }

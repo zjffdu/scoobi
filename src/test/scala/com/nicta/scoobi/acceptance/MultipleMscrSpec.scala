@@ -17,7 +17,7 @@ package com.nicta.scoobi
 package acceptance
 
 import Scoobi._
-import testing.NictaSimpleJobs
+import testing.mutable.NictaSimpleJobs
 
 class MultipleMscrSpec extends NictaSimpleJobs {
 
@@ -42,7 +42,7 @@ class MultipleMscrSpec extends NictaSimpleJobs {
 
   "An MSCR can read from two intermediate outputs." >> { implicit c: SC =>
 
-    def unique[A : Manifest : WireFormat : Grouping](x: DList[A]) = x.groupBy(identity).combine((a: A, b: A) => a)
+    def unique[A : WireFormat : Grouping](x: DList[A]) = x.groupBy(identity).combine(Reduction.first)
 
     val words1 = List("hello", "world")
     val words2 = List("foo", "bar", "hello")
@@ -50,7 +50,7 @@ class MultipleMscrSpec extends NictaSimpleJobs {
     val input1 = fromInput(Seq.fill(100)(words1).flatten: _*)
     val input2 = fromInput(Seq.fill(100)(words2).flatten: _*)
 
-    /* The uniques will be interemediate outputs that feed into 'join' which will
+    /* The uniques will be intermediate outputs that feed into 'join' which will
      * be implemented by a separate MSCR.*/
     (unique(input1) join unique(input2)).run must_== Seq(("hello", ("hello", "hello")))
   }
@@ -68,7 +68,7 @@ class MultipleMscrSpec extends NictaSimpleJobs {
 
     val expectedGBKs = Seq(("k1",Seq(("k1","v1"))), ("k2",Seq(("k2","v2"))))
 
-    persist(dObjectJoinedToInputGroupedDiff.materialise).toSeq must_== Seq(
+    dObjectJoinedToInputGroupedDiff.run must_== Seq(
         (expectedGBKs, ("v1",Seq(("k1","v1")))),
         (expectedGBKs, ("v2",Seq(("k2","v2")))))
   }
@@ -77,16 +77,18 @@ class MultipleMscrSpec extends NictaSimpleJobs {
 
     val input = fromDelimitedInput("k1,v1","k2,v2").collect { case key :: value :: _ => (key, value) }
 
-    val inputGrouped = input.groupBy(_._1).map(a => a).groupBy(_._1).map(b => (b._1, b._2.flatMap(_._2)) )
-    val inputGroupedDifferently = input.groupBy(_._2)
+                                                       
+    val inputGrouped = input.groupBy(_._1).map(identity).         // Seq((k1, Seq((k1, v1)), (k2, Seq((k2, v2))))
+                             groupBy(_._1).                       // Seq((k1, Seq((k1, Seq((k1, v1))))), (k2, Seq((k2, Seq((k2, v2))))))
+                             map(b => (b._1, b._2.flatMap(_._2))) // Seq((k1, Seq((k1, v1))), (k2, Seq((k2, v2))))
 
+    val inputGroupedDifferently = input.groupBy(_._2)             // Seq((v1, Seq((k1, v1)), (v2, Seq((k2, v2))))
     val inputGroupedAsDObject = inputGrouped.materialise
 
     val dObjectJoinedToInputGroupedDiff = (inputGroupedAsDObject join inputGroupedDifferently)
-
     val expectedGBKs = Seq(("k1",Seq(("k1","v1"))), ("k2",Seq(("k2","v2"))))
 
-    persist(dObjectJoinedToInputGroupedDiff.materialise).toSeq must_== Seq(
+    dObjectJoinedToInputGroupedDiff.run must_== Seq(
         (expectedGBKs, ("v1",Seq(("k1","v1")))),
         (expectedGBKs, ("v2",Seq(("k2","v2")))))
   }
@@ -106,10 +108,10 @@ class MultipleMscrSpec extends NictaSimpleJobs {
       z.materialise
     }
 
-    val (r0, r1) = persist(s(0), s(1))
-
-    (r0.head must_== (1, 1))
-    (r1.head must_== (1, 1))
+    val (r0, r1) = (s(0), s(1))
+    persist(r0, r1)
+    (r0.run.head must_== (1, 1))
+    (r1.run.head must_== (1, 1))
   }
 
   "Gbks with 'cross-over' dependencies are placed in seperate MSCRs." >> { implicit c: SC =>
@@ -127,9 +129,9 @@ class MultipleMscrSpec extends NictaSimpleJobs {
       z.materialise
     }
 
-    val (r0, r1) = persist(s(0), s(1))
-
-    (r0.head must_== (1, 1))
-    (r1.head must_== (1, 1))
+    val (r0, r1) = (s(0), s(1))
+    persist(r0, r1)
+    (r0.run.head must_== (1, 1))
+    (r1.run.head must_== (1, 1))
   }
 }

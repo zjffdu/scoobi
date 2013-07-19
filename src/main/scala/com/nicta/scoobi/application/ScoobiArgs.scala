@@ -18,7 +18,7 @@ package application
 
 import HadoopLogFactory._
 import org.specs2.main.CommandLineArguments
-
+import Levels._
 /**
  * This trait defines all the options which can be used to modify the behavior of a Scoobi application
  */
@@ -41,6 +41,9 @@ trait ScoobiArgs {
   def noLibJars = false
   /** @return false if temporary files and working directory must be cleaned-up after job execution */
   def keepFiles = false
+  /** @return true if the debug logs must show the computation graph */
+  def showComputationGraph = false
+
 }
 
 /**
@@ -50,15 +53,16 @@ trait ScoobiUserArgs extends ScoobiArgs {
   /** scoobi arguments passed on the command-line, i.e. values after 'scoobi' */
   def scoobiArgs: Seq[String]
 
-  override def showTimes        = is("times")
-  override def quiet            = isQuiet
-  override def level            = extractLevel(argumentsValues)
-  override def categories       = extractCategories(argumentsValues)
-  override def locally          = (isLocal || isInMemory) && !isCluster
-  override def useHadoopConfDir = is("useconfdir")
-  override def deleteLibJars    = is("deletelibjars")
-  override def noLibJars        = is("nolibjars")
-  override def keepFiles        = is("keepfiles")
+  override def showTimes            = is("times")
+  override def quiet                = isQuiet
+  override def level                = extractLevel(argumentsValues)
+  override def categories           = extractCategories(argumentsValues)
+  override def locally              = (isLocal || isInMemory) && !isCluster
+  override def useHadoopConfDir     = is("useconfdir")
+  override def deleteLibJars        = is("deletelibjars")
+  override def noLibJars            = is("nolibjars")
+  override def keepFiles            = is("keepfiles")
+  override def showComputationGraph = is("showgraph")
 
   def isInMemory                = is("inmemory")
   def isLocal                   = is("local")
@@ -73,17 +77,17 @@ trait ScoobiUserArgs extends ScoobiArgs {
   private[scoobi] def matches(argName: String) = argumentsValues.exists(_.matches(argName))
 
   private[scoobi]
-  lazy val argumentsValues = scoobiArgs
+  def argumentsValues = scoobiArgs
 
   private[scoobi]
   lazy val argumentsNames = Seq("times", "local", "!local", "useconfdir", "deletelibjars", "nolibjars",
-                                "keepfiles", "quiet", "verbose", "cluster", "inmemory", "!inmemory")
+                                "keepfiles", "quiet", "verbose", "cluster", "!cluster", "inmemory", "!inmemory", "showgraph")
 
   private[scoobi]
-  lazy val isVerbose = argumentsValues.exists(_ == "verbose")
+  def isVerbose = argumentsValues.exists(_ == "verbose")
 
   private[scoobi]
-  lazy val isQuiet = argumentsValues.exists(_ == "quiet")
+  def isQuiet = argumentsValues.exists(_ == "quiet")
 
   private[scoobi]
   def extractLevel(args: Seq[String]): Level =

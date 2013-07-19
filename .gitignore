@@ -8,6 +8,7 @@ src/main/*.iml
 .idea_modules/
 
 .jvmopts
+.sbtopts
 pgp.sbt
 .history
 .cache

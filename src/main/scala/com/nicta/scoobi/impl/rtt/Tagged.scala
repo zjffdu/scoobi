@@ -22,14 +22,14 @@ import core.WireFormat
 import java.io.{DataInput, DataOutput}
 
 /** A collection of types indexed by a tag */
-trait Tagged { self =>
+trait Tagged extends Configured { self =>
   private var t: Int = 0
   def tag = t
   def setTag(tag1: Int) { self.t = tag1 }
 
   /* Get/set the value for a given tag */
   def get(tag: Int): Any
-  def set(tag: Int, x: =>Any)
+  def set(x: Any)
 }
 
 /**
@@ -50,9 +50,9 @@ trait MetadataTaggedWritable extends MetadataWireFormats {
 
   private val values = new mutable.HashMap[Int, Any]
   def get(t: Int) = values(t)
-  def set(t: Int, value: =>Any) {
-    setTag(t)
-    setValue(value)
+
+  def set(value: Any) {
+    values(tag) = value
   }
 
   def setValue(value: =>Any) {
@@ -68,7 +68,7 @@ trait MetadataTaggedWritable extends MetadataWireFormats {
   def readFields(in: DataInput) {
     // if there are more than one tag, read the tag from the input stream
     setTag(if (tags.size > 1) in.readInt else tags(0))
-    setValue(wireFormat(tag).fromWire(in))
+    set(wireFormat(tag).fromWire(in))
   }
 
 }

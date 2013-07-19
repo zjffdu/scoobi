@@ -16,9 +16,11 @@
 package com.nicta.scoobi
 package application
 
-import testing.mutable.UnitSpecification
-import org.specs2.mutable.Tables
+import org.specs2.mutable.{After, Tables}
 import org.specs2.specification.Scope
+
+import testing.mutable.UnitSpecification
+import Scoobi._
 
 class ScoobiAppSpec extends UnitSpecification with Tables {
 
@@ -57,24 +59,23 @@ class ScoobiAppSpec extends UnitSpecification with Tables {
         inMemory must beFalse
         onLocal must beTrue
       }
-      "If the useconfdir argument is used, then the HADOOP_HOME variable is chosen to find the configuration files" >> new run {
-        lazy val execution = application.main(Array("scoobi", "useconfdir"))
-        execution must throwAn[Exception]("The HADOOP_HOME variable is must be set to access the configuration files")
+      "If the useconfdir argument is used, then the HADOOP_CONF_DIR variable is chosen to find the configuration files" >> new run {
+        val app = application(hadoopConfDir = Option("hadoop/conf"))
+        app.main(Array("scoobi", "useconfdir"))
+        app.hadoopConfDirs === Seq("hadoop/conf/")
       }
-      trait run extends Scope { outer =>
-        var inMemory  = false
-        var onLocal   = false
-        var onCluster = false
-        val application = new ScoobiApp {
-          def run() { }
-          override def inMemory[T](t: =>T)(implicit configuration: ScoobiConfiguration)   = { outer.inMemory = true; t }
-          override def onLocal[T] (t: =>T)(implicit configuration: ScoobiConfiguration)   = { outer.onLocal = true; t }
-          override def onCluster[T] (t: =>T)(implicit configuration: ScoobiConfiguration) = { outer.onCluster = true; t }
-          // simulate the non existence of the HADOOP_HOME variable to test the useconfdir argument
-          override lazy val HADOOP_COMMAND = None
-          override def get(name: String)    = None
-          override def getEnv(name: String) = None
-        }
+      "If the useconfdir argument is used, and the HADOOP_CONF_DIR variable is not set, then HADOOP_HOME is chosen to find the configuration files" >> new run {
+        val app = application(hadoopHome = Option("hadoop"))
+        app.main(Array("scoobi", "useconfdir"))
+        app.hadoopConfDirs === Seq("hadoop/conf/", "hadoop/etc/")
+      }
+    }
+    "The run method can be used to persist DLists and DObjects in a ScoobiApp" >> {
+      "this code compiles" ==> {
+        import Scoobi._ // this should work even in presence of the Scoobi import
+        new ScoobiApp {
+          def run() = run(DList(1, 2, 3))
+        }; ok
       }
     }
   }
@@ -121,8 +122,24 @@ class ScoobiAppSpec extends UnitSpecification with Tables {
         def run {}
         override def mainJarContainsDependencies = fatjar
       }
-      app.main(Array("example.MyApp", "--", "scoobi", if (nolibjars) "nolibjars" else ""))
+      app.main(Array("example.MyApp", "--", "scoobi", "cluster"+(if (nolibjars) ".nolibjars" else "cluster")))
       app.upload must be_==(upload)
     }
   }
+
+  trait run extends Scope { outer =>
+    var inMemory  = false
+    var onLocal   = false
+    var onCluster = false
+    val application: ScoobiApp = application()
+    def application(hadoopHome: Option[String] = None, hadoopConfDir: Option[String] = None) = new ScoobiApp {
+      def run() { }
+      override def inMemory[T](t: =>T)(implicit configuration: ScoobiConfiguration)   = { outer.inMemory = true; t }
+      override def onLocal[T] (t: =>T)(implicit configuration: ScoobiConfiguration)   = { outer.onLocal = true; t }
+      override def onCluster[T] (t: =>T)(implicit configuration: ScoobiConfiguration) = { outer.onCluster = true; t }
+      override def getEnv(name: String) = get(name)
+      override def get(name: String) = if (name == "HADOOP_HOME") hadoopHome else if (name == "HADOOP_CONF_DIR") hadoopConfDir else None
+    }
+  }
+
 }

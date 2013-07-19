@@ -18,16 +18,14 @@ package impl
 package rtt
 
 import org.apache.hadoop.io.{DataInputBuffer, RawComparator}
-import javassist._
 import core._
-import application.ScoobiConfiguration
 
 /** Custom GroupingComparator for tagged keys. */
 trait TaggedGroupingComparator extends RawComparator[TaggedKey]
 
 /** Companion object for dynamically constructing a subclass of TaggedGroupingComparator. */
 object TaggedGroupingComparator {
-  def apply(name: String, tags: Map[Int, (WireFormat[_], Grouping[_])])(implicit sc: ScoobiConfiguration): RuntimeClass =
+  def apply(name: String, tags: Map[Int, (WireReaderWriter, KeyGrouping)])(implicit sc: ScoobiConfiguration) : RuntimeClass =
     MetadataClassBuilder[MetadataTaggedGroupingComparator](name, tags).toRuntimeClass
 }
 
@@ -40,7 +38,7 @@ abstract class MetadataTaggedGroupingComparator extends TaggedGroupingComparator
    * current tag
    */
   def compare(key1: TaggedKey, key2: TaggedKey) =
-    if (key1.tag == key2.tag) grouping(key1.tag).groupCompare(key1.get(key1.tag), key2.get(key1.tag))
+    if (key1.tag == key2.tag) grouping(key1.tag).groupCompare(key1.get(key1.tag), key2.get(key1.tag)).toInt
     else                      key1.tag - key2.tag
 
   /**
@@ -52,7 +50,7 @@ abstract class MetadataTaggedGroupingComparator extends TaggedGroupingComparator
 
     // if there's only one tag, it is not written to the input stream
     val (tag1, tag2) = if (tags.size == 1) (tags(0), tags(0)) else (buffer1.readInt, buffer2.readInt)
-    if (tag1 == tag2) grouping(tag1).groupCompare(wireFormat(tag1).fromWire(buffer1), wireFormat(tag1).fromWire(buffer2))
+    if (tag1 == tag2) grouping(tag1).groupCompare(wireFormat(tag1).fromWire(buffer1), wireFormat(tag1).fromWire(buffer2)).toInt
     else              tag1 - tag2
   }
 }

@@ -1,11 +1,26 @@
+/**
+ * Copyright 2011,2012 National ICT Australia Limited
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.nicta.scoobi
 package impl
 package reflect
 
 import testing.mutable.UnitSpecification
 import java.util.jar.JarEntry
-import core.DList
-import java.util
+import Classes._
+import application.ScoobiApp
 
 class ClassesSpec extends UnitSpecification {
   "the main jar contains all the dependent jars classes if it contains the DList scoobi class" >> {
@@ -18,5 +33,14 @@ class ClassesSpec extends UnitSpecification {
 
     classesWithDependencies.mainJarContainsDependencies must beTrue
     classesWithoutDependencies.mainJarContainsDependencies must beFalse
+  }; p
+
+  "It is possible to find the directory containing a given class" >> {
+    "classFile returns the file resource for a given class" >> {
+      classFile(classOf[ScoobiApp].getName) === "com/nicta/scoobi/application/ScoobiApp.class"
+    }
+    "getResource returns the URL for a given class" >> {
+      getResource(classOf[ScoobiApp]).map(_.toString) must beSome.like { case s => s must endWith("com/nicta/scoobi/application/ScoobiApp.class") }
+    }
   }
 }

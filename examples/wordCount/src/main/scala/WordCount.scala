@@ -16,6 +16,7 @@
 package com.nicta.scoobi.examples
 
 import com.nicta.scoobi.Scoobi._
+import Reduction._
 
 object WordCount extends ScoobiApp {
   def run() {
@@ -30,19 +31,19 @@ object WordCount extends ScoobiApp {
 
     // Now what we want to do, is record the frequency of words. So we'll convert it to a key-value
     // pairs where the key is the word, and the value the frequency (which to start with is 1)
-    val keyValuePair: DList[(String, Int)] = lines flatMap { _.split(" ") } map { w => (w, 1) }
+    val keyValuePair: DList[(String, Int)] = lines mapFlatten { _.split(" ") } map { w => (w, 1) }
 
     // Now let's group all words that compare the same
     val grouped: DList[(String, Iterable[Int])] = keyValuePair.groupByKey
     // Now we have it in the form (Word, ['1', '1', '1', 1' etc.])
 
     // So what we want to do, is combine all the numbers into a single value (the frequency)
-    val combined: DList[(String, Int)] = grouped.combine(_+_)
+    val combined: DList[(String, Int)] = grouped.combine(Sum.int)
     
     val outputDirectory: String = if (args.length == 0) "word-count-results" else args(1) 
 
     // We can evaluate this, and write it to a text file
-    persist(toTextFile(combined, outputDirectory, overwrite=true))
+    persist(combined.toTextFile(outputDirectory, overwrite=true))
   }
 
   /* Generate 'count' random words with a high amount of collisions */

@@ -1,11 +1,21 @@
 <?xml version='1.0' encoding='UTF-8'?>
+<!--
+
+ THIS POM FILE IS NOT USED TO BUILD SCOOBI OR USED AS AN EXAMPLE OF POM FILE FOR A SCOOBI PROJECT!
+ IT IS ONLY USED FOR ITS PLUGINS: SONAR AND LICENSE
+
+-->
 <project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.nicta</groupId>
-    <artifactId>scoobi_2.9.2</artifactId>
+    <artifactId>scoobi_kiama</artifactId>
     <packaging>jar</packaging>
     <description>scoobi</description>
+<<<<<<< HEAD
     <version>0.6.0-cdh3-SNAPSHOT</version>
+=======
+    <version>0.7.0-cdh4-SNAPSHOT</version>
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
     <name>scoobi</name>
     <organization>
         <name>com.nicta</name>
@@ -26,10 +36,21 @@
                 <artifactId>maven-license-plugin</artifactId>
                 <configuration>
                     <header>notes/header.txt</header>
+                    <includes>
+                        <include>src/**/*.scala</include>
+                    </includes>
                 </configuration>
             </plugin>
         </plugins>
     </build>
+    <properties>
+        <sonar.language>scala</sonar.language>
+        <sonar.jdbc.url>jdbc:mysql://etd-packaging.research.nicta.com.au:3306/sonar?useUnicode=true&amp;characterEncoding=utf8&amp;rewriteBatchedStatements=true</sonar.jdbc.url>
+        <sonar.jdbc.driver>com.mysql.jdbc.Driver</sonar.jdbc.driver>
+        <sonar.jdbc.username>sonar</sonar.jdbc.username>
+        <sonar.jdbc.password>sonar</sonar.jdbc.password>
+        <sonar.host.url>http://etd-packaging.research.nicta.com.au/sonar</sonar.host.url>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>org.scala-lang</groupId>
@@ -46,13 +67,27 @@
         <dependency>
             <groupId>org.apache.avro</groupId>
             <artifactId>avro-mapred</artifactId>
+<<<<<<< HEAD
             <version>1.7.2</version>
+=======
+            <version>1.7.3.1</version>
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.avro</groupId>
             <artifactId>avro</artifactId>
+<<<<<<< HEAD
             <version>1.7.2</version>
+=======
+            <version>1.7.3.1</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client</artifactId>
+            <version>2.0.0-mr1-cdh4.0.1</version>
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -136,6 +171,15 @@
             <layout>default</layout>
         </repository>
         <repository>
+<<<<<<< HEAD
+=======
+            <id>nictasavro</id>
+            <name>nictasavro</name>
+            <url>http://nicta.github.io/scoobi/releases/</url>
+            <layout>default</layout>
+        </repository>
+        <repository>
+>>>>>>> a94af430886a1a2105157b7102b66d077b874514
             <id>sonatypesnapshot</id>
             <name>sonatypesnapshot</name>
             <url>http://oss.sonatype.org/content/repositories/snapshots/</url>
